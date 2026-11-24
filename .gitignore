@@ -1,0 +1,10 @@
+node_modules/
+dist/
+coverage/
+.agent-guard/
+*.log
+*.jsonl
+!test/fixtures/**/*.jsonl
+.env
+.env.*
+.DS_Store
