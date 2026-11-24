@@ -1,0 +1,47 @@
+# Example: put agent-guard in front of the official filesystem MCP server.
+# Requires Node 22+ (npx). Adjust the workspace path to a directory you want the agent to see.
+version: 1
+
+upstreams:
+  - name: fs
+    transport: stdio
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-filesystem", "${AGENT_GUARD_WORKSPACE:-.}"]
+
+agents:
+  default:
+    capabilities: ["fs.*"]
+
+labels:
+  - match: { server: fs, tool: ["read_*", "list_*", "search_*", "get_*", "directory_tree"] }
+    labels: [private_data]
+
+policy:
+  default: deny
+  rules:
+    - id: allow-reads
+      action: allow
+      match: { server: fs, tool: ["read_*", "list_*", "search_files", "get_file_info", "directory_tree", "list_allowed_directories"] }
+    - id: block-secrets-on-disk
+      action: deny
+      reason: credential files are off-limits to agents
+      match:
+        server: fs
+        args:
+          - { path: "$..*", regex: "(^|/)(\\.env[^/]*|id_(rsa|ed25519)[^/]*|\\.aws/credentials|\\.npmrc|\\.netrc)$" }
+    - id: writes-need-approval
+      action: require_approval
+      reason: file modification
+      match: { server: fs, tool: ["write_file", "edit_file", "create_directory", "move_file"] }
+  limits:
+    - id: fs-rate
+      match: { server: fs }
+      rate: { max: 120, windowSec: 60 }
+
+defenses:
+  secrets: { args: redact, outputs: redact, pii: true }
+  injection: { action: spotlight }
+
+approvals:
+  timeoutSec: 120
+  dashboard: { enabled: true, port: 8788 }

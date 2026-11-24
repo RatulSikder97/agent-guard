@@ -1,0 +1,82 @@
+# Demo gateway config used by `pnpm demo` and the end-to-end tests.
+# Upstreams are the deliberately vulnerable servers in ./servers.ts (no real files or network).
+version: 1
+
+gateway:
+  name: agent-guard-demo
+  stateDir: .agent-guard
+
+upstreams:
+  - name: corp
+    transport: stdio
+    command: node
+    args: ["--import", "tsx", "corp-stdio.ts"]
+  - name: web
+    transport: http
+    url: ${DEMO_WEB_URL:-http://127.0.0.1:9801/mcp}
+
+agents:
+  default:
+    capabilities: ["corp.*", "web.*"]
+  readonly-bot:
+    tokenEnv: READONLY_BOT_TOKEN
+    capabilities: ["corp.read_file", "web.fetch_url"]
+
+# Labels feed the lethal-trifecta detector.
+labels:
+  - match: { server: corp, tool: read_file }
+    labels: [private_data]
+  - match: { server: web, tool: fetch_url }
+    labels: [untrusted_content, egress]
+  - match: { server: [web, corp], tool: [http_post, send_email] }
+    labels: [egress]
+
+policy:
+  default: deny
+  rules:
+    - id: allow-workspace-reads
+      action: allow
+      match:
+        server: corp
+        tool: read_file
+        args:
+          - { path: $.path, glob: "/workspace/**" }
+    - id: block-dotenv
+      action: deny
+      reason: .env files hold credentials
+      match:
+        tool: read_file
+        args:
+          - { path: $.path, glob: "**/.env*" }
+    - id: allow-web
+      action: allow
+      match: { server: web }
+    - id: external-email-needs-approval
+      action: require_approval
+      reason: email to an external domain
+      match: { server: corp, tool: send_email }
+      when: '!args.to.lower().endsWith("@example.com")'
+    - id: allow-internal-email
+      action: allow
+      match: { server: corp, tool: send_email }
+  limits:
+    - id: fetch-rate
+      match: { tool: fetch_url }
+      rate: { max: 20, windowSec: 60 }
+    - id: email-budget
+      match: { tool: send_email }
+      budget: { maxCalls: 3 }
+
+defenses:
+  secrets: { args: redact, outputs: redact, pii: true }
+  injection:
+    threshold: 0.5
+    action: spotlight
+  egress:
+    allow: ["docs.example.com", "*.example.net"]
+    markdownImages: strip
+  trifecta:
+    action: require_approval
+
+approvals:
+  timeoutSec: 30
